@@ -24,22 +24,35 @@ define mounts (
   case $::operatingsystem {
     redhat, centos, amazon: {
 
-      fstab { "fstab entry for ${source} to ${dest} as ${type}":
-        ensure => $ensure,
-        source => $source,
-        dest   => $dest,
-        type   => $type,
-        opts   => $opts,
-        dump   => $dump,
-        passno => $passno,
+      if $opts =~ 'krb' {
+          if empty($klist) {
+              notify { "Mount point ${source} requires kerberos and does not have a klist entry to support it": }
+              $canmount = false
+          } else {
+              $canmount = true
+          }
+      } else {
+        $canmount = true
+      }
+
+      if $canmount {
+          fstab { "fstab entry for ${source} to ${dest} as ${type}":
+            ensure => $ensure,
+            source => $source,
+            dest   => $dest,
+            type   => $type,
+            opts   => $opts,
+            dump   => $dump,
+            passno => $passno,
+          }
       }
 
       if $type == 'nfs' {
-        ensure_resource('package', 'nfs-utils', {'ensure' => 'present'})
+        ensure_resource('package', 'nfs-utils', {'ensure' => 'latest','require' => undef})
         case $::operatingsystemmajrelease {
           '6': {
-            ensure_resource('package', 'rpcbind', {'ensure' => 'present'})
-            ensure_resource('service', 'rpcbind', {'ensure' => 'running'})
+            ensure_resource('package', 'rpcbind', {'ensure' => 'present','require' => undef})
+            ensure_resource('service', 'rpcbind', {'ensure' => 'running', 'require' => undef})
             Package['rpcbind'] -> Service['rpcbind']
           }
           '5': {
@@ -52,6 +65,9 @@ define mounts (
           }
         }
       }
+      if $type == 'cifs' {
+        ensure_resource('package', 'cifs-utils', {'ensure' => 'present'})
+      }
 
       case $ensure {
         'present': {
@@ -59,9 +75,11 @@ define mounts (
           $dirtree = dirtree($dest)
           ensure_resource('file', $dirtree, {'ensure' => 'directory'})
 
-          exec { "/bin/mount '${dest}'":
-            unless  => "/bin/mount -l | /bin/grep '${dest}'",
-            require => [File[$dirtree], Fstab["fstab entry for ${source} to ${dest} as ${type}"]],
+          if $canmount {
+            exec { "/bin/mount '${dest}'":
+              unless  => "/bin/mount -l | /bin/grep '${dest}'",
+              require => [File[$dirtree], Fstab["fstab entry for ${source} to ${dest} as ${type}"]],
+            }
           }
         }
         'absent': {
